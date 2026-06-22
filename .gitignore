@@ -1,0 +1,14 @@
+node_modules/
+.env
+projects/
+*.log
+
+# Audio/media samples (large binary files)
+*.wav
+*.mp3
+*.mp4
+*.webm
+
+# OS files
+Thumbs.db
+.DS_Store

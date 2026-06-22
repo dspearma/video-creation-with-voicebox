@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EduVid Studio — Educational Video Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>" />
+</head>
+<body>
+
+  <!-- ─── Background Ambience ─── -->
+  <div class="bg-ambience">
+    <div class="bg-orb bg-orb--bronze"></div>
+    <div class="bg-orb bg-orb--cyan"></div>
+    <div class="bg-orb bg-orb--violet"></div>
+  </div>
+
+  <!-- ─── App Shell ─── -->
+  <div id="app" class="app-shell">
+
+    <!-- ─── Sidebar ─── -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar__brand">
+        <div class="sidebar__logo">
+          <span class="logo-icon">🎬</span>
+          <div>
+            <h1 class="logo-title">EduVid</h1>
+            <span class="logo-subtitle">STUDIO</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="btn-new-project" class="btn btn--primary btn--full sidebar__new-btn">
+        <span class="btn__icon">＋</span>
+        New Project
+      </button>
+
+      <div class="sidebar__projects-header">
+        <span class="label-sm">PROJECTS</span>
+        <button id="btn-refresh-projects" class="btn-icon" title="Refresh">⟳</button>
+      </div>
+
+      <ul id="project-list" class="sidebar__project-list">
+        <li class="sidebar__empty">No projects yet</li>
+      </ul>
+
+      <div class="sidebar__footer">
+        <span class="text-xs text-muted">EduVid Studio v1.0</span>
+      </div>
+    </aside>
+
+    <!-- ─── Main Content ─── -->
+    <main class="main">
+
+      <!-- ─── Top Bar ─── -->
+      <header class="topbar">
+        <button id="btn-sidebar-toggle" class="btn-icon topbar__toggle" title="Toggle sidebar">☰</button>
+        <h2 id="project-title" class="topbar__title">Select or create a project</h2>
+        <div class="topbar__actions">
+          <span id="save-indicator" class="save-indicator hidden">
+            <span class="save-indicator__dot"></span> Saved
+          </span>
+        </div>
+      </header>
+
+      <!-- ─── Phase Stepper ─── -->
+      <nav id="stepper" class="stepper">
+        <div class="stepper__track"></div>
+        <button class="stepper__step active" data-phase="1">
+          <span class="stepper__number">1</span>
+          <span class="stepper__label">Research</span>
+        </button>
+        <button class="stepper__step" data-phase="2">
+          <span class="stepper__number">2</span>
+          <span class="stepper__label">Script</span>
+        </button>
+        <button class="stepper__step" data-phase="3">
+          <span class="stepper__number">3</span>
+          <span class="stepper__label">Audio</span>
+        </button>
+        <button class="stepper__step" data-phase="4">
+          <span class="stepper__number">4</span>
+          <span class="stepper__label">Video</span>
+        </button>
+        <button class="stepper__step" data-phase="5">
+          <span class="stepper__number">5</span>
+          <span class="stepper__label">Render</span>
+        </button>
+      </nav>
+
+      <!-- ─── Phase Panels ─── -->
+      <div id="phase-container" class="phase-container">
+
+        <!-- ═══ Phase 1 — Research ═══ -->
+        <section id="phase-1" class="phase active" data-phase="1">
+          <div class="phase__header">
+            <h3 class="phase__title">📚 Research Material</h3>
+            <p class="phase__desc">Import your source content — paste text, upload a file, or import directly from Google Docs.</p>
+          </div>
+
+          <div class="research-grid">
+            <!-- Paste -->
+            <div class="glass-card research-card">
+              <div class="research-card__header">
+                <span class="research-card__icon">📝</span>
+                <h4>Paste Text</h4>
+              </div>
+              <textarea id="research-text" class="textarea" rows="10" placeholder="Paste your research material, lecture notes, or transcript here…"></textarea>
+              <button id="btn-save-research" class="btn btn--primary btn--full" disabled>
+                Save Research
+              </button>
+            </div>
+
+            <!-- Upload -->
+            <div class="glass-card research-card">
+              <div class="research-card__header">
+                <span class="research-card__icon">📁</span>
+                <h4>Upload File</h4>
+              </div>
+              <div id="research-dropzone" class="dropzone">
+                <div class="dropzone__content">
+                  <span class="dropzone__icon">⬆</span>
+                  <p class="dropzone__text">Drag &amp; drop a .txt or .md file</p>
+                  <span class="dropzone__hint">or click to browse</span>
+                </div>
+                <input type="file" id="research-file-input" accept=".txt,.md,.doc,.docx,.pdf" hidden />
+              </div>
+              <div id="research-file-name" class="file-badge hidden"></div>
+            </div>
+
+            <!-- Google Docs -->
+            <div class="glass-card research-card">
+              <div class="research-card__header">
+                <span class="research-card__icon">🔗</span>
+                <h4>Google Docs</h4>
+              </div>
+              <p class="text-sm text-muted mb-3">Connect your Google account and import directly from Google Docs.</p>
+              <button id="btn-google-auth" class="btn btn--accent btn--full mb-3">
+                <span class="btn__icon">🔑</span>
+                Connect Google Account
+              </button>
+              <div id="google-docs-picker" class="hidden">
+                <label class="label-sm mb-1">Select a document:</label>
+                <select id="google-doc-select" class="select">
+                  <option value="">— Choose a Google Doc —</option>
+                </select>
+                <button id="btn-import-gdoc" class="btn btn--primary btn--full mt-2" disabled>
+                  Import Document
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Research Preview -->
+          <div id="research-preview" class="glass-card mt-4 hidden">
+            <div class="flex-between mb-2">
+              <h4 class="text-sm text-accent">✅ Research Loaded</h4>
+              <span id="research-word-count" class="badge badge--bronze"></span>
+            </div>
+            <div id="research-preview-text" class="research-preview-text"></div>
+          </div>
+        </section>
+
+        <!-- ═══ Phase 2 — Script ═══ -->
+        <section id="phase-2" class="phase" data-phase="2">
+          <div class="phase__header">
+            <h3 class="phase__title">🎬 Script Generation</h3>
+            <p class="phase__desc">Define a learning objective, generate scene-by-scene scripts, then edit to perfection.</p>
+          </div>
+
+          <div class="glass-card mb-4">
+            <label class="label-sm mb-1" for="learning-objective">Learning Objective</label>
+            <div class="input-row">
+              <input type="text" id="learning-objective" class="input" placeholder="e.g. Students will understand the causes of the American Revolution" />
+              <button id="btn-generate-script" class="btn btn--primary btn--glow">
+                <span id="generate-script-spinner" class="spinner hidden"></span>
+                ✨ Generate Script
+              </button>
+            </div>
+          </div>
+
+          <div id="scenes-container" class="scenes-grid">
+            <div class="empty-state">
+              <span class="empty-state__icon">🎞</span>
+              <p>No scenes yet. Enter a learning objective and generate your script.</p>
+            </div>
+          </div>
+
+          <div id="scenes-actions" class="scenes-actions hidden">
+            <button id="btn-save-scenes" class="btn btn--primary">
+              💾 Save Scenes
+            </button>
+            <button id="btn-add-scene" class="btn btn--outline">
+              ＋ Add Scene
+            </button>
+          </div>
+        </section>
+
+        <!-- ═══ Phase 3 — Audio ═══ -->
+        <section id="phase-3" class="phase" data-phase="3">
+          <div class="phase__header">
+            <h3 class="phase__title">🎙 Audio Generation</h3>
+            <p class="phase__desc">Select a Voicebox voice profile and generate narration for every scene.</p>
+          </div>
+
+          <div class="glass-card mb-4">
+            <div class="audio-controls">
+              <div class="audio-controls__left">
+                <label class="label-sm mb-1">Voice Profile</label>
+                <select id="voice-profile-select" class="select">
+                  <option value="">Loading profiles…</option>
+                </select>
+              </div>
+              <div class="audio-controls__right">
+                <div id="voicebox-status" class="status-badge status-badge--unknown">
+                  <span class="status-badge__dot"></span>
+                  Checking Voicebox…
+                </div>
+                <button id="btn-generate-audio" class="btn btn--primary btn--glow" disabled>
+                  <span id="generate-audio-spinner" class="spinner hidden"></span>
+                  🔊 Generate All Voiceovers
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="audio-scenes-container" class="scenes-grid">
+            <div class="empty-state">
+              <span class="empty-state__icon">🔇</span>
+              <p>Generate a script first, then come here to create voiceovers.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══ Phase 4 — Video ═══ -->
+        <section id="phase-4" class="phase" data-phase="4">
+          <div class="phase__header">
+            <h3 class="phase__title">🎥 Video Upload</h3>
+            <p class="phase__desc">Copy each Flow prompt, generate your clips in Flow, then upload them here.</p>
+          </div>
+
+          <div id="video-scenes-container" class="scenes-grid">
+            <div class="empty-state">
+              <span class="empty-state__icon">📹</span>
+              <p>Generate a script first, then upload Flow-generated video clips here.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══ Phase 5 — Render ═══ -->
+        <section id="phase-5" class="phase" data-phase="5">
+          <div class="phase__header">
+            <h3 class="phase__title">🚀 Final Render</h3>
+            <p class="phase__desc">Assemble all scenes into a single polished educational video.</p>
+          </div>
+
+          <div class="render-panel glass-card">
+            <div class="render-panel__status">
+              <div id="render-status-icon" class="render-status-icon">🎬</div>
+              <h4 id="render-status-text" class="render-status-text">Ready to Render</h4>
+              <p id="render-status-desc" class="text-sm text-muted">All scenes with audio and video will be combined into one video.</p>
+            </div>
+
+            <div id="render-progress-section" class="render-progress hidden">
+              <div class="render-progress__bar-wrap">
+                <div id="render-progress-bar" class="render-progress__bar" style="width: 0%"></div>
+              </div>
+              <p id="render-progress-label" class="text-sm text-center mt-1">Processing…</p>
+            </div>
+
+            <div class="render-panel__actions">
+              <button id="btn-render" class="btn btn--primary btn--large btn--glow">
+                🚀 Render Final Video
+              </button>
+              <a id="btn-download" href="#" class="btn btn--accent btn--large hidden" download>
+                ⬇ Download Video
+              </a>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ─── New Project Modal ─── -->
+  <div id="modal-new-project" class="modal hidden">
+    <div class="modal__backdrop"></div>
+    <div class="modal__content glass-card">
+      <div class="modal__header">
+        <h3>Create New Project</h3>
+        <button class="modal__close btn-icon">&times;</button>
+      </div>
+      <div class="modal__body">
+        <label class="label-sm mb-1" for="new-project-name">Project Name</label>
+        <input type="text" id="new-project-name" class="input mb-3" placeholder="e.g. American Revolution — Lesson 3" />
+        <label class="label-sm mb-1" for="new-project-objective">Learning Objective <span class="text-muted">(optional)</span></label>
+        <input type="text" id="new-project-objective" class="input" placeholder="Students will understand…" />
+      </div>
+      <div class="modal__footer">
+        <button id="btn-cancel-project" class="btn btn--outline">Cancel</button>
+        <button id="btn-create-project" class="btn btn--primary">Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Toast Container ─── -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
