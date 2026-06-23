@@ -413,6 +413,11 @@ app.post('/api/projects/:id/plan-shots', async (req, res) => {
           error: err.message,
         });
       }
+
+      // Delay between scenes to avoid Gemini rate limits
+      if (i < videoScenes.length - 1) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
     }
 
     broadcast({
