@@ -405,6 +405,7 @@ app.post('/api/projects/:id/plan-shots', async (req, res) => {
           shotCount: result.shots.length,
         });
       } catch (err) {
+        console.error(`Shot planning failed for scene ${sceneNum}:`, err.message);
         broadcast({
           type: 'shot-planning-error',
           projectId: project.id,
@@ -459,6 +460,7 @@ app.post('/api/projects/:id/plan-shots/:sceneNum', async (req, res) => {
         shotCount: result.shots.length,
       });
     } catch (err) {
+      console.error(`Shot planning failed for scene ${sceneNum}:`, err.message);
       broadcast({
         type: 'shot-planning-error',
         projectId: project.id,
