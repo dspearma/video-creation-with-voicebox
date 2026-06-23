@@ -14,6 +14,7 @@ const googleDocs = require('./lib/google-docs-reader');
 const scriptGenerator = require('./lib/script-generator');
 const voiceboxClient = require('./lib/voicebox-client');
 const renderer = require('./lib/renderer');
+const shotPlanner = require('./lib/shot-planner');
 
 const app = express();
 const server = http.createServer(app);
@@ -346,56 +347,297 @@ app.get('/api/projects/:id/audio/:sceneNum', (req, res) => {
   res.sendFile(filePath);
 });
 
-// ─── VIDEO UPLOAD ROUTES ─────────────────────────────────────────
+// ─── SHOT PLANNING ROUTES ────────────────────────────────────────
 
+// Plan shots for all video scenes (requires audio durations)
+app.post('/api/projects/:id/plan-shots', async (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project.scenes || project.scenes.length === 0) {
+      return res.status(400).json({ error: 'No scenes to plan' });
+    }
+
+    // Find video scenes that need shot planning
+    const videoScenes = project.scenes.filter(s => {
+      const mediaType = s.media_type || s.mediaType || 'video';
+      const duration = s.audioDuration || 0;
+      return mediaType === 'video' && duration > 0;
+    });
+
+    if (videoScenes.length === 0) {
+      return res.status(400).json({ error: 'No video scenes with audio durations found. Generate audio first.' });
+    }
+
+    res.json({ success: true, message: `Planning shots for ${videoScenes.length} video scenes...`, totalScenes: videoScenes.length });
+
+    // Process in background
+    for (let i = 0; i < videoScenes.length; i++) {
+      const scene = videoScenes[i];
+      const sceneNum = scene.scene_number || (project.scenes.indexOf(scene) + 1);
+
+      broadcast({
+        type: 'shot-planning-progress',
+        projectId: project.id,
+        scene: sceneNum,
+        total: videoScenes.length,
+        current: i + 1,
+        status: 'planning',
+      });
+
+      try {
+        const durations = shotPlanner.planShotDurations(scene.audioDuration);
+        const result = await shotPlanner.generateShotPrompts(scene, durations);
+
+        // Store on scene
+        scene.shots = result.shots;
+        scene.shotBreakdown = result.breakdown;
+        scene.shotsPlanned = true;
+        projectManager.saveProject(project.id, project);
+
+        broadcast({
+          type: 'shot-planning-progress',
+          projectId: project.id,
+          scene: sceneNum,
+          total: videoScenes.length,
+          current: i + 1,
+          status: 'done',
+          shotCount: result.shots.length,
+        });
+      } catch (err) {
+        broadcast({
+          type: 'shot-planning-error',
+          projectId: project.id,
+          scene: sceneNum,
+          error: err.message,
+        });
+      }
+    }
+
+    broadcast({
+      type: 'shot-planning-complete',
+      projectId: project.id,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Plan shots for a single scene
+app.post('/api/projects/:id/plan-shots/:sceneNum', async (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const sceneNum = parseInt(req.params.sceneNum, 10);
+    const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+    if (!scene) return res.status(404).json({ error: `Scene ${sceneNum} not found` });
+
+    const duration = scene.audioDuration || 0;
+    if (duration <= 0) {
+      return res.status(400).json({ error: 'Scene has no audio duration. Generate audio first.' });
+    }
+
+    const durations = shotPlanner.planShotDurations(duration);
+    res.json({ success: true, message: `Planning ${durations.length} shots for scene ${sceneNum}...`, shotDurations: durations });
+
+    // Generate in background
+    try {
+      const result = await shotPlanner.generateShotPrompts(scene, durations);
+      scene.shots = result.shots;
+      scene.shotBreakdown = result.breakdown;
+      scene.shotsPlanned = true;
+      projectManager.saveProject(project.id, project);
+
+      broadcast({
+        type: 'shot-planning-progress',
+        projectId: project.id,
+        scene: sceneNum,
+        total: 1,
+        current: 1,
+        status: 'done',
+        shotCount: result.shots.length,
+      });
+    } catch (err) {
+      broadcast({
+        type: 'shot-planning-error',
+        projectId: project.id,
+        scene: sceneNum,
+        error: err.message,
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get shot breakdown for a scene
+app.get('/api/projects/:id/scenes/:sceneNum/shots', (req, res) => {
+  const project = projectManager.loadProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const sceneNum = parseInt(req.params.sceneNum, 10);
+  const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+  if (!scene) return res.status(404).json({ error: `Scene ${sceneNum} not found` });
+
+  res.json({
+    sceneNum,
+    audioDuration: scene.audioDuration || 0,
+    shotsPlanned: !!scene.shotsPlanned,
+    shots: scene.shots || [],
+    breakdown: scene.shotBreakdown || null,
+  });
+});
+
+// ─── VIDEO/CLIP UPLOAD ROUTES ────────────────────────────────────
+
+// Upload a clip to a scene (appends to clips array)
 app.post(
-  '/api/projects/:id/scenes/:sceneNum/upload-video',
-  upload.single('video'),
-  (req, res) => {
+  '/api/projects/:id/scenes/:sceneNum/upload-clip',
+  upload.single('file'),
+  async (req, res) => {
     try {
       const project = projectManager.loadProject(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
-
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
       const sceneNum = parseInt(req.params.sceneNum, 10);
-      const ext = path.extname(req.file.originalname).toLowerCase() || '.mp4';
-      const filename = `scene_${sceneNum}${ext}`;
-      const destPath = projectManager.getProjectPath(
-        req.params.id,
-        'video',
-        filename
-      );
+      const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+      if (!scene) return res.status(404).json({ error: `Scene ${sceneNum} not found` });
 
-      // Move uploaded file to project video dir
+      // Initialize clips array if needed
+      if (!Array.isArray(scene.clips)) scene.clips = [];
+
+      const clipNum = scene.clips.length + 1;
+      const ext = path.extname(req.file.originalname).toLowerCase() || '.mp4';
+      const filename = `scene_${sceneNum}_clip_${clipNum}${ext}`;
+      const destPath = projectManager.getProjectPath(req.params.id, 'video', filename);
+
       fs.renameSync(req.file.path, destPath);
 
-      // Update scene
-      const scene = project.scenes.find(
-        (s) => (s.scene_number || 0) === sceneNum
-      );
-      if (scene) {
-        scene.videoFile = filename;
-      }
+      // Get clip duration via ffprobe
+      let duration = 0;
+      try {
+        duration = await require('./lib/renderer').getMediaDuration(destPath);
+      } catch { /* duration unknown */ }
+
+      scene.clips.push({ clipNumber: clipNum, file: filename, duration });
+      // Keep legacy field updated (first clip or null)
+      scene.videoFile = scene.clips.length > 0 ? scene.clips[0].file : null;
       projectManager.saveProject(project.id, project);
 
-      res.json({ success: true, sceneNum, filename });
+      res.json({
+        success: true,
+        sceneNum,
+        clipNumber: clipNum,
+        filename,
+        duration,
+        totalClips: scene.clips.length,
+        totalClipDuration: scene.clips.reduce((s, c) => s + (c.duration || 0), 0),
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   }
 );
 
-// Serve video/image files
+// Legacy single-upload endpoint (redirects to clip upload)
+app.post(
+  '/api/projects/:id/scenes/:sceneNum/upload-video',
+  upload.single('video'),
+  (req, res, next) => {
+    // Rewrite to clip upload
+    req.file = req.file || (req.files && req.files[0]);
+    if (req.file) {
+      // Forward to clip upload handler by re-calling
+      req.url = `/api/projects/${req.params.id}/scenes/${req.params.sceneNum}/upload-clip`;
+    }
+    next();
+  }
+);
+
+// List clips for a scene
+app.get('/api/projects/:id/scenes/:sceneNum/clips', (req, res) => {
+  const project = projectManager.loadProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const sceneNum = parseInt(req.params.sceneNum, 10);
+  const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+  if (!scene) return res.status(404).json({ error: `Scene ${sceneNum} not found` });
+
+  const clips = scene.clips || [];
+  res.json({
+    sceneNum,
+    clips,
+    totalClipDuration: clips.reduce((s, c) => s + (c.duration || 0), 0),
+    audioDuration: scene.audioDuration || 0,
+  });
+});
+
+// Delete a specific clip
+app.delete('/api/projects/:id/scenes/:sceneNum/clips/:clipNum', (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const sceneNum = parseInt(req.params.sceneNum, 10);
+    const clipNum = parseInt(req.params.clipNum, 10);
+    const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+    if (!scene || !scene.clips) return res.status(404).json({ error: 'Clip not found' });
+
+    const clipIdx = scene.clips.findIndex(c => c.clipNumber === clipNum);
+    if (clipIdx === -1) return res.status(404).json({ error: 'Clip not found' });
+
+    // Delete file
+    const filePath = projectManager.getProjectPath(req.params.id, 'video', scene.clips[clipIdx].file);
+    try { fs.unlinkSync(filePath); } catch {}
+
+    scene.clips.splice(clipIdx, 1);
+    // Renumber remaining clips
+    scene.clips.forEach((c, i) => { c.clipNumber = i + 1; });
+    scene.videoFile = scene.clips.length > 0 ? scene.clips[0].file : null;
+    projectManager.saveProject(project.id, project);
+
+    res.json({ success: true, remainingClips: scene.clips.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve a specific clip file
+app.get('/api/projects/:id/scenes/:sceneNum/clips/:clipNum/file', (req, res) => {
+  const project = projectManager.loadProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const sceneNum = parseInt(req.params.sceneNum, 10);
+  const clipNum = parseInt(req.params.clipNum, 10);
+  const scene = project.scenes.find(s => (s.scene_number || 0) === sceneNum);
+  if (!scene || !scene.clips) return res.status(404).json({ error: 'Clip not found' });
+
+  const clip = scene.clips.find(c => c.clipNumber === clipNum);
+  if (!clip) return res.status(404).json({ error: 'Clip not found' });
+
+  const filePath = projectManager.getProjectPath(req.params.id, 'video', clip.file);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+  res.sendFile(filePath);
+});
+
+// Legacy: Serve video/image files (backwards compatible)
 app.get('/api/projects/:id/video/:sceneNum', (req, res) => {
   const sceneNum = req.params.sceneNum;
   const videoDir = projectManager.getProjectPath(req.params.id, 'video');
-  // Search for any file matching scene_N with any extension
   const exts = ['.mp4', '.jpg', '.jpeg', '.png', '.webp', '.bmp'];
   for (const ext of exts) {
     const filePath = path.join(videoDir, `scene_${sceneNum}${ext}`);
-    if (fs.existsSync(filePath)) {
-      return res.sendFile(filePath);
+    if (fs.existsSync(filePath)) return res.sendFile(filePath);
+  }
+  // Try first clip
+  const project = projectManager.loadProject(req.params.id);
+  if (project) {
+    const scene = project.scenes.find(s => (s.scene_number || 0) === +sceneNum);
+    if (scene && scene.clips && scene.clips.length > 0) {
+      const clipPath = projectManager.getProjectPath(req.params.id, 'video', scene.clips[0].file);
+      if (fs.existsSync(clipPath)) return res.sendFile(clipPath);
     }
   }
   return res.status(404).json({ error: 'Media not found' });
@@ -418,8 +660,9 @@ app.post('/api/projects/:id/render', async (req, res) => {
       if (!scene.audioFile) {
         return res.status(400).json({ error: `Scene ${num} is missing audio` });
       }
-      if (!scene.videoFile) {
-        return res.status(400).json({ error: `Scene ${num} is missing ${(scene.media_type === 'still_image') ? 'image' : 'video'}` });
+      const hasClips = scene.clips && scene.clips.length > 0;
+      if (!hasClips && !scene.videoFile) {
+        return res.status(400).json({ error: `Scene ${num} is missing ${(scene.media_type === 'still_image') ? 'image' : 'video clips'}` });
       }
     }
 

@@ -26,6 +26,10 @@
       videoFile: s.videoFile || s.video_file || null,
       mediaType: s.mediaType || s.media_type || 'video',
       kenBurnsDirection: s.kenBurnsDirection || s.ken_burns_direction || '',
+      clips: s.clips || [],
+      shots: s.shots || [],
+      shotsPlanned: s.shotsPlanned || false,
+      shotBreakdown: s.shotBreakdown || null,
     };
   }
   function normalizeScenes(scenes) { return (scenes || []).map(normalizeScene); }
@@ -197,7 +201,34 @@
         dom.generateAudioSpinner.classList.add('hidden');
         updateStepperAccess();
       }
+    } else if (msg.type === 'shot-planning-progress') {
+      if (msg.status === 'done') {
+        toast(`Scene ${msg.scene} — ${msg.shotCount} shots planned`, 'success');
+        // Reload project to get updated shot data
+        reloadProjectScenes();
+      } else {
+        toast(`Planning shots for Scene ${msg.scene}...`, 'info');
+      }
+    } else if (msg.type === 'shot-planning-complete') {
+      toast('All video scene shots planned!', 'success');
+    } else if (msg.type === 'shot-planning-error') {
+      toast(`Shot planning failed for Scene ${msg.scene}: ${msg.error}`, 'error');
     }
+  }
+
+  async function reloadProjectScenes() {
+    if (!state.currentProject) return;
+    try {
+      const project = await api(`/api/projects/${state.currentProject.id}`);
+      if (project && project.scenes) {
+        state.scenes = normalizeScenes(project.scenes);
+        state.scenes.forEach((s, i) => {
+          const num = i + 1;
+          state.videoStatus[num] = (s.clips && s.clips.length > 0) || !!s.videoFile;
+        });
+        renderVideoScenes();
+      }
+    } catch {}
   }
 
   // ─────────────────────────────────────
@@ -323,7 +354,7 @@
       state.scenes.forEach((s, i) => {
         const num = i + 1;
         state.audioStatus[num] = s.audioGenerated ? 'done' : 'pending';
-        state.videoStatus[num] = !!s.videoUploaded;
+        state.videoStatus[num] = (s.clips && s.clips.length > 0) || !!s.videoFile || !!s.videoUploaded;
       });
 
       dom.projectTitle.textContent = project.name || 'Untitled Project';
@@ -713,44 +744,175 @@
   // ─────────────────────────────────────
   // PHASE 4 — Video
   // ─────────────────────────────────────
+  // ─────────────────────────────────────
   function renderVideoScenes() {
     if (!state.scenes.length) {
       dom.videoScenesContainer.innerHTML = '<div class="empty-state"><span class="empty-state__icon">📹</span><p>Generate a script first, then upload Flow-generated video clips here.</p></div>';
       return;
     }
 
-    dom.videoScenesContainer.innerHTML = state.scenes.map((scene, i) => {
+    // Check if any video scenes need shot planning
+    const hasVideoScenes = state.scenes.some(s => s.mediaType !== 'still_image' && s.audioDuration > 0);
+    const allPlanned = state.scenes.every(s => s.mediaType === 'still_image' || s.shotsPlanned || !s.audioDuration);
+
+    const headerHtml = hasVideoScenes && !allPlanned
+      ? `<div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
+           <button class="btn btn--primary" id="btn-plan-all-shots">🎬 Plan All Shots</button>
+         </div>`
+      : '';
+
+    dom.videoScenesContainer.innerHTML = headerHtml + state.scenes.map((scene, i) => {
       const num = i + 1;
-      const uploaded = state.videoStatus[num];
       const isStill = scene.mediaType === 'still_image';
-      const acceptType = isStill ? 'image/*' : 'video/*';
       const mediaLabel = isStill ? 'Still Image' : 'Video';
       const mediaIcon = isStill ? '🖼️' : '🎞';
       const mediaBadgeClass = isStill ? 'badge--bronze' : 'badge--cyan';
 
-      const mediaPreview = uploaded
-        ? isStill
-          ? `<div class="video-preview">
-              <img src="/api/projects/${state.currentProject.id}/video/${num}" style="width:100%;border-radius:8px;" />
-             </div>`
-          : `<div class="video-preview">
-              <video controls preload="metadata" src="/api/projects/${state.currentProject.id}/video/${num}"></video>
-             </div>`
-        : `<div class="video-upload-zone" data-scene-num="${num}">
-            <div class="video-upload-zone__content">
-              <span class="video-upload-zone__icon">${mediaIcon}</span>
-              <p class="dropzone__text">${isStill ? 'Drag & drop your still image' : 'Drag & drop your Flow video'}</p>
-              <span class="dropzone__hint">or click to browse</span>
-            </div>
-            <input type="file" class="video-file-input" data-scene-num="${num}" accept="${acceptType}" hidden />
-           </div>`;
+      const clips = scene.clips || [];
+      const totalClipDuration = clips.reduce((s, c) => s + (c.duration || 0), 0);
+      const audioDuration = scene.audioDuration || 0;
+      const coveragePct = audioDuration > 0 ? Math.min(100, Math.round((totalClipDuration / audioDuration) * 100)) : 0;
+      const isOver = totalClipDuration >= audioDuration && audioDuration > 0;
 
-      const duration = scene.audioDuration ? `<span class="duration-badge">⏱ ${scene.audioDuration}s</span>` : '';
-      const kenBurnsInfo = isStill && scene.kenBurnsDirection
-        ? `<div class="ken-burns-info" style="margin-top:8px;padding:8px 12px;background:rgba(150,99,39,0.15);border-radius:6px;font-size:0.85rem;">
-            <strong>🎬 Camera Movement:</strong> ${esc(scene.kenBurnsDirection)}
+      // ── Per-shot prompts for video scenes ──
+      const shots = scene.shots || [];
+      const hasShotPlan = shots.length > 0 && scene.shotsPlanned;
+
+      let promptSection = '';
+      if (isStill) {
+        // Still image: show single prompt as before
+        const kenBurnsInfo = scene.kenBurnsDirection
+          ? `<div class="ken-burns-info" style="margin-top:8px;padding:8px 12px;background:rgba(150,99,39,0.15);border-radius:6px;font-size:0.85rem;">
+              <strong>🎬 Camera Movement:</strong> ${esc(scene.kenBurnsDirection)}
+             </div>`
+          : '';
+        promptSection = `
+          <div class="video-scene-card__prompt">
+            <div class="flex-between mb-2">
+              <span class="label-sm">Image Generation Prompt</span>
+            </div>
+            <p class="text-sm text-muted mb-3" style="line-height:1.6">${esc(scene.flowPrompt || 'No prompt available')}</p>
+            <button class="btn-copy-large" data-copy="${esc(scene.flowPrompt || '')}">📋 Copy Prompt</button>
+            ${kenBurnsInfo}
+          </div>`;
+      } else if (hasShotPlan) {
+        // Video with shot plan: show per-shot prompts
+        const shotsHtml = shots.map((shot, si) => {
+          const shotClip = clips.find(c => c.clipNumber === shot.shot_number);
+          const uploadedBadge = shotClip
+            ? '<span class="badge badge--success" style="font-size:.7rem;">✓ Uploaded</span>'
+            : '<span class="badge badge--pending" style="font-size:.7rem;">Needs clip</span>';
+
+          return `
+            <div class="shot-prompt-card" style="padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <span class="badge badge--cyan" style="font-size:.7rem;">Shot ${shot.shot_number}</span>
+                <span class="badge" style="font-size:.7rem;background:rgba(139,92,246,0.15);color:#8B5CF6;">${shot.duration}s</span>
+                ${shot.shot_type ? `<span style="font-size:.75rem;color:var(--text-muted);">${esc(shot.shot_type)}</span>` : ''}
+                ${uploadedBadge}
+              </div>
+              <p class="text-sm text-muted" style="line-height:1.5;margin-bottom:8px;">${esc(shot.flow_prompt || 'No prompt')}</p>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <button class="btn-copy-large" data-copy="${esc(shot.flow_prompt || '')}" style="font-size:.8rem;padding:4px 12px;">📋 Copy</button>
+                ${shot.audio_cues ? `<span style="font-size:.75rem;color:var(--bronze-light);">🔊 ${esc(shot.audio_cues)}</span>` : ''}
+              </div>
+            </div>`;
+        }).join('');
+
+        // Show breakdown toggle
+        const breakdownHtml = scene.shotBreakdown
+          ? `<details style="margin-top:12px;">
+               <summary style="cursor:pointer;font-size:.85rem;color:var(--cyan);font-weight:600;">📄 View Full Cinematic Breakdown (CSV)</summary>
+               <pre style="margin-top:8px;padding:12px;background:rgba(0,0,0,0.3);border-radius:6px;font-size:.75rem;overflow-x:auto;white-space:pre-wrap;color:var(--text-muted);">${esc(scene.shotBreakdown)}</pre>
+             </details>`
+          : '';
+
+        promptSection = `
+          <div class="video-scene-card__prompt">
+            <div class="flex-between mb-2">
+              <span class="label-sm">Shot Plan (${shots.length} shots · ${shots.reduce((s, sh) => s + sh.duration, 0)}s total)</span>
+              <button class="btn-replan btn--sm" data-scene="${num}" style="font-size:.75rem;padding:4px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:var(--text-muted);cursor:pointer;">↻ Re-plan</button>
+            </div>
+            ${shotsHtml}
+            ${breakdownHtml}
+          </div>`;
+      } else {
+        // Video without shot plan: show original prompt + plan button
+        promptSection = `
+          <div class="video-scene-card__prompt">
+            <div class="flex-between mb-2">
+              <span class="label-sm">Scene Direction</span>
+            </div>
+            <p class="text-sm text-muted mb-3" style="line-height:1.6">${esc(scene.flowPrompt || 'No prompt available')}</p>
+            ${audioDuration > 0
+              ? `<button class="btn btn--primary btn-plan-scene" data-scene="${num}" style="margin-top:8px;">🎬 Plan Shots for This Scene (${audioDuration.toFixed(1)}s)</button>`
+              : '<p class="text-sm" style="color:var(--bronze);">⚠️ Generate audio first to plan shots</p>'
+            }
+          </div>`;
+      }
+
+      // Build clips list
+      const clipsHtml = clips.length > 0
+        ? clips.map(clip => `
+            <div class="clip-item" data-scene="${num}" data-clip="${clip.clipNumber}">
+              <div class="clip-item__preview">
+                <video preload="metadata" src="/api/projects/${state.currentProject.id}/scenes/${num}/clips/${clip.clipNumber}/file" style="width:120px;height:68px;object-fit:cover;border-radius:4px;"></video>
+              </div>
+              <div class="clip-item__info">
+                <span class="clip-item__label">Clip ${clip.clipNumber}</span>
+                <span class="clip-item__duration">${(clip.duration || 0).toFixed(1)}s</span>
+              </div>
+              <button class="clip-item__delete" data-scene="${num}" data-clip="${clip.clipNumber}" title="Remove clip">✕</button>
+            </div>
+          `).join('')
+        : '';
+
+      // Coverage bar
+      const coverageBar = audioDuration > 0 && !isStill
+        ? `<div class="clip-coverage" style="margin:8px 0;">
+             <div class="clip-coverage__bar" style="height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
+               <div style="width:${coveragePct}%;height:100%;background:${isOver ? 'var(--clr-success, #00D4AA)' : 'var(--clr-warning, #F59E0B)'};border-radius:3px;transition:width 0.3s;"></div>
+             </div>
+             <div class="clip-coverage__label" style="display:flex;justify-content:space-between;font-size:0.75rem;margin-top:4px;opacity:0.7;">
+               <span>${totalClipDuration.toFixed(1)}s of clips</span>
+               <span>${audioDuration.toFixed(1)}s needed ${isOver ? '✓' : ''}</span>
+             </div>
            </div>`
         : '';
+
+      // Upload zone
+      const uploadZone = isStill
+        ? (clips.length === 0
+            ? `<div class="video-upload-zone" data-scene-num="${num}">
+                <div class="video-upload-zone__content">
+                  <span class="video-upload-zone__icon">${mediaIcon}</span>
+                  <p class="dropzone__text">Drag & drop your still image</p>
+                  <span class="dropzone__hint">or click to browse</span>
+                </div>
+                <input type="file" class="clip-file-input" data-scene-num="${num}" accept="image/*" hidden />
+               </div>`
+            : '')
+        : `<div class="video-upload-zone video-upload-zone--compact" data-scene-num="${num}">
+            <div class="video-upload-zone__content" style="padding:12px;">
+              <span style="font-size:1.2rem;">➕</span>
+              <span class="dropzone__text" style="font-size:0.85rem;">Add clip (4, 6, 8, or 10 sec from Flow)</span>
+            </div>
+            <input type="file" class="clip-file-input" data-scene-num="${num}" accept="video/*" hidden />
+           </div>`;
+
+      // Still image preview
+      const stillPreview = isStill && clips.length > 0
+        ? `<div class="video-preview">
+            <img src="/api/projects/${state.currentProject.id}/scenes/${num}/clips/1/file" style="width:100%;border-radius:8px;" />
+           </div>`
+        : '';
+
+      const clipCount = clips.length;
+      const statusBadge = isStill
+        ? (clipCount > 0 ? '<span class="badge badge--success">✓ Uploaded</span>' : '<span class="badge badge--pending">No image</span>')
+        : (clipCount > 0
+            ? `<span class="badge badge--success">${clipCount} clip${clipCount > 1 ? 's' : ''} · ${totalClipDuration.toFixed(1)}s</span>`
+            : `<span class="badge badge--pending">No clips</span>`);
 
       return `
         <div class="scene-card" data-scene="${num}">
@@ -758,19 +920,18 @@
             <div class="scene-card__num">${num}</div>
             <span style="flex:1; font-weight:600;">${esc(scene.title || `Scene ${num}`)}</span>
             <span class="badge ${mediaBadgeClass}">${mediaLabel}</span>
-            ${duration}
-            ${uploaded ? '<span class="badge badge--success">✓ Uploaded</span>' : `<span class="badge badge--pending">No ${mediaLabel.toLowerCase()}</span>`}
+            ${audioDuration ? `<span class="duration-badge">⏱ ${audioDuration.toFixed(1)}s</span>` : ''}
+            ${hasShotPlan ? `<span class="badge" style="background:rgba(139,92,246,0.15);color:#8B5CF6;">${shots.length} shots</span>` : ''}
+            ${statusBadge}
           </div>
           <div class="scene-card__body">
-            <div class="video-scene-card__prompt">
-              <div class="flex-between mb-2">
-                <span class="label-sm">${isStill ? 'Image Generation Prompt' : 'Flow Video Prompt'}</span>
-              </div>
-              <p class="text-sm text-muted mb-3" style="line-height:1.6">${esc(scene.flowPrompt || 'No prompt available')}</p>
-              <button class="btn-copy-large" data-copy="${esc(scene.flowPrompt || '')}">📋 Copy Prompt</button>
-              ${kenBurnsInfo}
+            ${promptSection}
+            ${stillPreview}
+            ${coverageBar}
+            <div class="clips-list" data-scene="${num}" style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">
+              ${clipsHtml}
             </div>
-            ${mediaPreview}
+            ${uploadZone}
           </div>
         </div>
       `;
@@ -779,17 +940,33 @@
     // Wire up upload zones
     $$('.video-upload-zone', dom.videoScenesContainer).forEach(zone => {
       const num = +zone.dataset.sceneNum;
-      const input = zone.querySelector('.video-file-input');
+      const input = zone.querySelector('.clip-file-input');
 
-      zone.addEventListener('click', () => input.click());
+      zone.addEventListener('click', (e) => { if (e.target !== input) input.click(); });
       zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
       zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
       zone.addEventListener('drop', (e) => {
         e.preventDefault(); zone.classList.remove('dragover');
-        if (e.dataTransfer.files.length) uploadVideo(num, e.dataTransfer.files[0]);
+        if (e.dataTransfer.files.length) {
+          // Upload all dropped files as separate clips
+          Array.from(e.dataTransfer.files).forEach(f => uploadClip(num, f));
+        }
       });
       input.addEventListener('change', () => {
-        if (input.files.length) uploadVideo(num, input.files[0]);
+        if (input.files.length) {
+          Array.from(input.files).forEach(f => uploadClip(num, f));
+          input.value = ''; // Reset for repeat uploads
+        }
+      });
+    });
+
+    // Wire up delete buttons
+    $$('.clip-item__delete', dom.videoScenesContainer).forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const sceneNum = +btn.dataset.scene;
+        const clipNum = +btn.dataset.clip;
+        await deleteClip(sceneNum, clipNum);
       });
     });
 
@@ -797,22 +974,106 @@
     $$('.btn-copy-large', dom.videoScenesContainer).forEach(btn => {
       btn.addEventListener('click', () => copyText(btn, btn.dataset.copy));
     });
+
+    // Plan shots for individual scenes
+    $$('.btn-plan-scene', dom.videoScenesContainer).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const sceneNum = +btn.dataset.scene;
+        btn.disabled = true;
+        btn.textContent = '⏳ Planning shots...';
+        try {
+          await api(`/api/projects/${state.currentProject.id}/plan-shots/${sceneNum}`, { method: 'POST' });
+          toast(`Planning shots for Scene ${sceneNum}...`, 'info');
+        } catch (err) {
+          toast(`Shot planning failed: ${err.message}`, 'error');
+          btn.disabled = false;
+          btn.textContent = `🎬 Plan Shots for This Scene`;
+        }
+      });
+    });
+
+    // Re-plan button
+    $$('.btn-replan', dom.videoScenesContainer).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const sceneNum = +btn.dataset.scene;
+        btn.disabled = true;
+        btn.textContent = '⏳ Re-planning...';
+        try {
+          await api(`/api/projects/${state.currentProject.id}/plan-shots/${sceneNum}`, { method: 'POST' });
+          toast(`Re-planning shots for Scene ${sceneNum}...`, 'info');
+        } catch (err) {
+          toast(`Re-planning failed: ${err.message}`, 'error');
+          btn.disabled = false;
+          btn.textContent = '↻ Re-plan';
+        }
+      });
+    });
+
+    // Plan all shots button
+    const planAllBtn = document.getElementById('btn-plan-all-shots');
+    if (planAllBtn) {
+      planAllBtn.addEventListener('click', async () => {
+        planAllBtn.disabled = true;
+        planAllBtn.textContent = '⏳ Planning all shots...';
+        try {
+          await api(`/api/projects/${state.currentProject.id}/plan-shots`, { method: 'POST' });
+          toast('Planning shots for all video scenes...', 'info');
+        } catch (err) {
+          toast(`Shot planning failed: ${err.message}`, 'error');
+          planAllBtn.disabled = false;
+          planAllBtn.textContent = '🎬 Plan All Shots';
+        }
+      });
+    }
   }
 
-  async function uploadVideo(sceneNum, file) {
+  async function uploadClip(sceneNum, file) {
     if (!state.currentProject) return;
     const formData = new FormData();
     formData.append('file', file);
     try {
-      await api(`/api/projects/${state.currentProject.id}/scenes/${sceneNum}/upload-video`, {
+      const result = await api(`/api/projects/${state.currentProject.id}/scenes/${sceneNum}/upload-clip`, {
         method: 'POST',
         body: formData,
       });
+      // Update local scene data
+      const scene = state.scenes[sceneNum - 1];
+      if (scene) {
+        if (!scene.clips) scene.clips = [];
+        scene.clips.push({
+          clipNumber: result.clipNumber,
+          file: result.filename,
+          duration: result.duration,
+        });
+      }
       state.videoStatus[sceneNum] = true;
       renderVideoScenes();
-      toast(`Video uploaded for Scene ${sceneNum}`, 'success');
+      toast(`Clip ${result.clipNumber} uploaded for Scene ${sceneNum} (${result.duration.toFixed(1)}s)`, 'success');
       updateStepperAccess();
-    } catch {}
+    } catch (err) {
+      toast(`Upload failed: ${err.message}`, 'error');
+    }
+  }
+
+  async function deleteClip(sceneNum, clipNum) {
+    if (!state.currentProject) return;
+    try {
+      await api(`/api/projects/${state.currentProject.id}/scenes/${sceneNum}/clips/${clipNum}`, {
+        method: 'DELETE',
+      });
+      // Update local scene data
+      const scene = state.scenes[sceneNum - 1];
+      if (scene && scene.clips) {
+        scene.clips = scene.clips.filter(c => c.clipNumber !== clipNum);
+        scene.clips.forEach((c, i) => { c.clipNumber = i + 1; });
+      }
+      state.videoStatus[sceneNum] = scene && scene.clips && scene.clips.length > 0;
+      renderVideoScenes();
+      toast(`Clip removed from Scene ${sceneNum}`, 'info');
+      updateStepperAccess();
+    } catch (err) {
+      toast(`Delete failed: ${err.message}`, 'error');
+    }
   }
 
   // ─────────────────────────────────────
