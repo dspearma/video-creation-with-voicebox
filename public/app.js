@@ -790,11 +790,7 @@
       const mediaIcon = isStill ? '🖼️' : '🎞';
       const mediaBadgeClass = isStill ? 'badge--bronze' : 'badge--cyan';
 
-      const clips = scene.clips || [];
-      const totalClipDuration = clips.reduce((s, c) => s + (c.duration || 0), 0);
       const audioDuration = scene.audioDuration || 0;
-      const coveragePct = audioDuration > 0 ? Math.min(100, Math.round((totalClipDuration / audioDuration) * 100)) : 0;
-      const isOver = totalClipDuration >= audioDuration && audioDuration > 0;
 
       // ── Per-shot prompts for video scenes ──
       const shots = scene.shots || [];
@@ -846,29 +842,21 @@
           </div>`;
       } else if (hasShotPlan) {
         // Video with shot plan: show per-shot prompts
-        const shotsHtml = shots.map((shot, si) => {
-          const shotClip = clips.find(c => c.clipNumber === shot.shot_number);
-          const uploadedBadge = shotClip
-            ? '<span class="badge badge--success" style="font-size:.7rem;">✓ Uploaded</span>'
-            : '<span class="badge badge--pending" style="font-size:.7rem;">Needs clip</span>';
-
-          return `
+        const shotsHtml = shots.map((shot, si) => `
             <div class="shot-prompt-card" style="padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                 <span class="badge badge--cyan" style="font-size:.7rem;">Shot ${shot.shot_number}</span>
                 <span class="badge" style="font-size:.7rem;background:rgba(139,92,246,0.15);color:#8B5CF6;">${shot.duration}s</span>
                 ${shot.shot_type ? `<span style="font-size:.75rem;color:var(--text-muted);">${esc(shot.shot_type)}</span>` : ''}
-                ${uploadedBadge}
               </div>
               <p class="text-sm text-muted" style="line-height:1.5;margin-bottom:8px;">${esc(shot.flow_prompt || 'No prompt')}</p>
               <div style="display:flex;gap:8px;align-items:center;">
                 <button class="btn-copy-large" data-copy="${esc(shot.flow_prompt || '')}" style="font-size:.8rem;padding:4px 12px;">📋 Copy</button>
                 ${shot.audio_cues ? `<span style="font-size:.75rem;color:var(--bronze-light);">🔊 ${esc(shot.audio_cues)}</span>` : ''}
               </div>
-            </div>`;
-        }).join('');
+            </div>`
+        ).join('');
 
-        // Show breakdown toggle
         const breakdownHtml = scene.shotBreakdown
           ? `<details style="margin-top:12px;">
                <summary style="cursor:pointer;font-size:.85rem;color:var(--cyan);font-weight:600;">📄 View Full Cinematic Breakdown (CSV)</summary>
@@ -900,69 +888,6 @@
           </div>`;
       }
 
-      // Build clips list
-      const clipsHtml = clips.length > 0
-        ? clips.map(clip => `
-            <div class="clip-item" data-scene="${num}" data-clip="${clip.clipNumber}">
-              <div class="clip-item__preview">
-                <video preload="metadata" src="/api/projects/${state.currentProject.id}/scenes/${num}/clips/${clip.clipNumber}/file" style="width:120px;height:68px;object-fit:cover;border-radius:4px;"></video>
-              </div>
-              <div class="clip-item__info">
-                <span class="clip-item__label">Clip ${clip.clipNumber}</span>
-                <span class="clip-item__duration">${(clip.duration || 0).toFixed(1)}s</span>
-              </div>
-              <button class="clip-item__delete" data-scene="${num}" data-clip="${clip.clipNumber}" title="Remove clip">✕</button>
-            </div>
-          `).join('')
-        : '';
-
-      // Coverage bar
-      const coverageBar = audioDuration > 0 && !isStill
-        ? `<div class="clip-coverage" style="margin:8px 0;">
-             <div class="clip-coverage__bar" style="height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
-               <div style="width:${coveragePct}%;height:100%;background:${isOver ? 'var(--clr-success, #00D4AA)' : 'var(--clr-warning, #F59E0B)'};border-radius:3px;transition:width 0.3s;"></div>
-             </div>
-             <div class="clip-coverage__label" style="display:flex;justify-content:space-between;font-size:0.75rem;margin-top:4px;opacity:0.7;">
-               <span>${totalClipDuration.toFixed(1)}s of clips</span>
-               <span>${audioDuration.toFixed(1)}s needed ${isOver ? '✓' : ''}</span>
-             </div>
-           </div>`
-        : '';
-
-      // Upload zone
-      const uploadZone = isStill
-        ? (clips.length === 0
-            ? `<div class="video-upload-zone" data-scene-num="${num}">
-                <div class="video-upload-zone__content">
-                  <span class="video-upload-zone__icon">${mediaIcon}</span>
-                  <p class="dropzone__text">Drag & drop your still image</p>
-                  <span class="dropzone__hint">or click to browse</span>
-                </div>
-                <input type="file" class="clip-file-input" data-scene-num="${num}" accept="image/*" hidden />
-               </div>`
-            : '')
-        : `<div class="video-upload-zone video-upload-zone--compact" data-scene-num="${num}">
-            <div class="video-upload-zone__content" style="padding:12px;">
-              <span style="font-size:1.2rem;">➕</span>
-              <span class="dropzone__text" style="font-size:0.85rem;">Add clip (4, 6, 8, or 10 sec from Flow)</span>
-            </div>
-            <input type="file" class="clip-file-input" data-scene-num="${num}" accept="video/*" hidden />
-           </div>`;
-
-      // Still image preview
-      const stillPreview = isStill && clips.length > 0
-        ? `<div class="video-preview">
-            <img src="/api/projects/${state.currentProject.id}/scenes/${num}/clips/1/file" style="width:100%;border-radius:8px;" />
-           </div>`
-        : '';
-
-      const clipCount = clips.length;
-      const statusBadge = isStill
-        ? (clipCount > 0 ? '<span class="badge badge--success">✓ Uploaded</span>' : '<span class="badge badge--pending">No image</span>')
-        : (clipCount > 0
-            ? `<span class="badge badge--success">${clipCount} clip${clipCount > 1 ? 's' : ''} · ${totalClipDuration.toFixed(1)}s</span>`
-            : `<span class="badge badge--pending">No clips</span>`);
-
       return `
         <div class="scene-card" data-scene="${num}">
           <div class="scene-card__header">
@@ -975,53 +900,13 @@
                 ? `<span class="badge" style="background:rgba(150,99,39,0.15);color:#966327;">${imagePrompts.length} images</span>`
                 : `<span class="badge" style="background:rgba(139,92,246,0.15);color:#8B5CF6;">${shots.length} shots</span>`)
               : ''}
-            ${statusBadge}
           </div>
           <div class="scene-card__body">
             ${promptSection}
-            ${stillPreview}
-            ${coverageBar}
-            <div class="clips-list" data-scene="${num}" style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">
-              ${clipsHtml}
-            </div>
-            ${uploadZone}
           </div>
         </div>
       `;
     }).join('');
-
-    // Wire up upload zones
-    $$('.video-upload-zone', dom.videoScenesContainer).forEach(zone => {
-      const num = +zone.dataset.sceneNum;
-      const input = zone.querySelector('.clip-file-input');
-
-      zone.addEventListener('click', (e) => { if (e.target !== input) input.click(); });
-      zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
-      zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-      zone.addEventListener('drop', (e) => {
-        e.preventDefault(); zone.classList.remove('dragover');
-        if (e.dataTransfer.files.length) {
-          // Upload all dropped files as separate clips
-          Array.from(e.dataTransfer.files).forEach(f => uploadClip(num, f));
-        }
-      });
-      input.addEventListener('change', () => {
-        if (input.files.length) {
-          Array.from(input.files).forEach(f => uploadClip(num, f));
-          input.value = ''; // Reset for repeat uploads
-        }
-      });
-    });
-
-    // Wire up delete buttons
-    $$('.clip-item__delete', dom.videoScenesContainer).forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const sceneNum = +btn.dataset.scene;
-        const clipNum = +btn.dataset.clip;
-        await deleteClip(sceneNum, clipNum);
-      });
-    });
 
     // Copy buttons
     $$('.btn-copy-large', dom.videoScenesContainer).forEach(btn => {
@@ -1080,54 +965,7 @@
     }
   }
 
-  async function uploadClip(sceneNum, file) {
-    if (!state.currentProject) return;
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const result = await api(`/api/projects/${state.currentProject.id}/scenes/${sceneNum}/upload-clip`, {
-        method: 'POST',
-        body: formData,
-      });
-      // Update local scene data
-      const scene = state.scenes[sceneNum - 1];
-      if (scene) {
-        if (!scene.clips) scene.clips = [];
-        scene.clips.push({
-          clipNumber: result.clipNumber,
-          file: result.filename,
-          duration: result.duration,
-        });
-      }
-      state.videoStatus[sceneNum] = true;
-      renderVideoScenes();
-      toast(`Clip ${result.clipNumber} uploaded for Scene ${sceneNum} (${result.duration.toFixed(1)}s)`, 'success');
-      updateStepperAccess();
-    } catch (err) {
-      toast(`Upload failed: ${err.message}`, 'error');
-    }
-  }
 
-  async function deleteClip(sceneNum, clipNum) {
-    if (!state.currentProject) return;
-    try {
-      await api(`/api/projects/${state.currentProject.id}/scenes/${sceneNum}/clips/${clipNum}`, {
-        method: 'DELETE',
-      });
-      // Update local scene data
-      const scene = state.scenes[sceneNum - 1];
-      if (scene && scene.clips) {
-        scene.clips = scene.clips.filter(c => c.clipNumber !== clipNum);
-        scene.clips.forEach((c, i) => { c.clipNumber = i + 1; });
-      }
-      state.videoStatus[sceneNum] = scene && scene.clips && scene.clips.length > 0;
-      renderVideoScenes();
-      toast(`Clip removed from Scene ${sceneNum}`, 'info');
-      updateStepperAccess();
-    } catch (err) {
-      toast(`Delete failed: ${err.message}`, 'error');
-    }
-  }
 
   // ─────────────────────────────────────
   // PHASE 5 — Export

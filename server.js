@@ -510,6 +510,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
       const narration = scene.narration || '';
 
       if (scene.shots && scene.shots.length > 0) {
+        // Video scenes with multi-shot plan
         scene.shots.forEach((shot, si) => {
           rows.push([
             csvEscape(sceneNum),
@@ -517,14 +518,31 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
             csvEscape(mediaType),
             csvEscape(duration),
             csvEscape(si === 0 ? narration : ''),
-            csvEscape(si + 1),
+            csvEscape(shot.shot_number || si + 1),
             csvEscape(shot.duration || ''),
-            csvEscape(shot.type || ''),
+            csvEscape(shot.shot_type || ''),
             csvEscape(shot.flow_prompt || shot.flowPrompt || ''),
             csvEscape(shot.audio_cues || shot.audioCues || ''),
           ].join(','));
         });
+      } else if (scene.imagePrompts && scene.imagePrompts.length > 0) {
+        // Still image scenes with multi-image prompts
+        scene.imagePrompts.forEach((img, ii) => {
+          rows.push([
+            csvEscape(sceneNum),
+            csvEscape(sceneTitle),
+            csvEscape(mediaType),
+            csvEscape(duration),
+            csvEscape(ii === 0 ? narration : ''),
+            csvEscape(img.image_number || ii + 1),
+            csvEscape(img.display_duration || ''),
+            csvEscape(`Still Image - ${img.ken_burns_direction || 'static'}`),
+            csvEscape(img.prompt || ''),
+            csvEscape(''),
+          ].join(','));
+        });
       } else {
+        // Unplanned scene — single prompt
         rows.push([
           csvEscape(sceneNum),
           csvEscape(sceneTitle),
