@@ -15,6 +15,7 @@ const scriptGenerator = require('./lib/script-generator');
 const voiceboxClient = require('./lib/voicebox-client');
 const renderer = require('./lib/renderer');
 const shotPlanner = require('./lib/shot-planner');
+const archiver = require('archiver');
 
 const app = express();
 const server = http.createServer(app);
@@ -347,6 +348,207 @@ app.get('/api/projects/:id/audio/:sceneNum', (req, res) => {
   res.sendFile(filePath);
 });
 
+// ─── REGENERATE SINGLE SCENE AUDIO ──────────────────────────────
+
+app.post('/api/projects/:id/regenerate-audio/:sceneNum', async (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const sceneNum = parseInt(req.params.sceneNum, 10);
+    const scene = project.scenes.find(
+      (s) => (s.scene_number || (project.scenes.indexOf(s) + 1)) === sceneNum
+    );
+    if (!scene) return res.status(404).json({ error: 'Scene not found' });
+
+    const profileId = req.body.profileId || project.voiceProfileId;
+    if (!profileId) return res.status(400).json({ error: 'No voice profile specified' });
+
+    // Delete existing audio file
+    const audioDir = projectManager.getProjectPath(project.id, 'audio');
+    const outputPath = path.join(audioDir, `scene_${sceneNum}.wav`);
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+
+    // Clear metadata and save
+    scene.audioFile = null;
+    scene.audioDuration = null;
+    projectManager.saveProject(project.id, project);
+
+    // Respond immediately
+    res.json({ success: true, message: `Regenerating audio for scene ${sceneNum}` });
+
+    // Background generation
+    broadcast({
+      type: 'audio-progress',
+      projectId: project.id,
+      scene: sceneNum,
+      total: project.scenes.length,
+      status: 'generating',
+    });
+
+    try {
+      await voiceboxClient.generateAudio(scene.narration, profileId, outputPath);
+      const duration = await voiceboxClient.getAudioDuration(outputPath);
+
+      scene.audioFile = `scene_${sceneNum}.wav`;
+      scene.audioDuration = duration;
+      projectManager.saveProject(project.id, project);
+
+      broadcast({
+        type: 'audio-progress',
+        projectId: project.id,
+        scene: sceneNum,
+        total: project.scenes.length,
+        status: 'done',
+        duration,
+      });
+    } catch (err) {
+      scene.audioFile = null;
+      scene.audioDuration = null;
+      projectManager.saveProject(project.id, project);
+
+      broadcast({
+        type: 'audio-progress',
+        projectId: project.id,
+        scene: sceneNum,
+        total: project.scenes.length,
+        status: 'error',
+        error: err.message,
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DOWNLOAD SCRIPT AS TXT ─────────────────────────────────────
+
+app.get('/api/projects/:id/download-script', (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const title = project.name || 'Untitled Project';
+    let text = `${title}\n${'='.repeat(title.length)}\n\n`;
+
+    (project.scenes || []).forEach((scene, i) => {
+      const sceneNum = scene.scene_number || (i + 1);
+      const sceneTitle = scene.title || `Scene ${sceneNum}`;
+      text += `Scene ${sceneNum}: ${sceneTitle}\n`;
+      text += `${'-'.repeat(`Scene ${sceneNum}: ${sceneTitle}`.length)}\n`;
+      text += `${scene.narration || ''}\n\n`;
+    });
+
+    const safeName = (project.name || 'project').replace(/[^a-zA-Z0-9_-]/g, '_');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_script.txt"`);
+    res.send(text);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DOWNLOAD AUDIO BUNDLE AS ZIP ───────────────────────────────
+
+app.get('/api/projects/:id/download-audio-bundle', (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const safeName = (project.name || 'project').replace(/[^a-zA-Z0-9_-]/g, '_');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_audio.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 5 } });
+    archive.on('error', (err) => res.status(500).json({ error: err.message }));
+    archive.pipe(res);
+
+    const audioDir = projectManager.getProjectPath(project.id, 'audio');
+    (project.scenes || []).forEach((scene, i) => {
+      if (!scene.audioFile) return;
+      const sceneNum = scene.scene_number || (i + 1);
+      const sceneTitle = (scene.title || 'Untitled').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const paddedNum = String(sceneNum).padStart(2, '0');
+      const filePath = path.join(audioDir, scene.audioFile);
+      if (fs.existsSync(filePath)) {
+        archive.file(filePath, { name: `Scene_${paddedNum}_${sceneTitle}.wav` });
+      }
+    });
+
+    archive.finalize();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DOWNLOAD SHOT CHART AS CSV ─────────────────────────────────
+
+app.get('/api/projects/:id/download-shot-chart', (req, res) => {
+  try {
+    const project = projectManager.loadProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    function csvEscape(val) {
+      if (val == null) return '';
+      const str = String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return str;
+    }
+
+    const header = 'Scene,Title,Type,Duration(s),Narration,Shot#,Shot Duration(s),Shot Type,Flow Prompt,Audio Cues';
+    const rows = [header];
+
+    (project.scenes || []).forEach((scene, i) => {
+      const sceneNum = scene.scene_number || (i + 1);
+      const sceneTitle = scene.title || '';
+      const mediaType = scene.media_type || scene.mediaType || 'video';
+      const duration = scene.audioDuration || '';
+      const narration = scene.narration || '';
+
+      if (scene.shots && scene.shots.length > 0) {
+        scene.shots.forEach((shot, si) => {
+          rows.push([
+            csvEscape(sceneNum),
+            csvEscape(sceneTitle),
+            csvEscape(mediaType),
+            csvEscape(duration),
+            csvEscape(si === 0 ? narration : ''),
+            csvEscape(si + 1),
+            csvEscape(shot.duration || ''),
+            csvEscape(shot.type || ''),
+            csvEscape(shot.flow_prompt || shot.flowPrompt || ''),
+            csvEscape(shot.audio_cues || shot.audioCues || ''),
+          ].join(','));
+        });
+      } else {
+        rows.push([
+          csvEscape(sceneNum),
+          csvEscape(sceneTitle),
+          csvEscape(mediaType),
+          csvEscape(duration),
+          csvEscape(narration),
+          csvEscape(''),
+          csvEscape(''),
+          csvEscape(''),
+          csvEscape(scene.flow_prompt || scene.flowPrompt || ''),
+          csvEscape(''),
+        ].join(','));
+      }
+    });
+
+    const safeName = (project.name || 'project').replace(/[^a-zA-Z0-9_-]/g, '_');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}_shot_chart.csv"`);
+    res.send(rows.join('\n'));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── SHOT PLANNING ROUTES ────────────────────────────────────────
 
 // Plan shots for all video scenes (requires audio durations)
@@ -358,54 +560,71 @@ app.post('/api/projects/:id/plan-shots', async (req, res) => {
       return res.status(400).json({ error: 'No scenes to plan' });
     }
 
-    // Find video scenes that need shot planning
-    const videoScenes = project.scenes.filter(s => {
+    // Find scenes that need planning (video AND still_image)
+    const planScenes = project.scenes.filter(s => {
       const mediaType = s.media_type || s.mediaType || 'video';
       const duration = s.audioDuration || 0;
-      return mediaType === 'video' && duration > 0;
+      return duration > 0 && !s.shotsPlanned;
     });
 
-    if (videoScenes.length === 0) {
-      return res.status(400).json({ error: 'No video scenes with audio durations found. Generate audio first.' });
+    if (planScenes.length === 0) {
+      return res.status(400).json({ error: 'No scenes need planning. All scenes are already planned or missing audio.' });
     }
 
-    res.json({ success: true, message: `Planning shots for ${videoScenes.length} video scenes...`, totalScenes: videoScenes.length });
+    res.json({ success: true, message: `Planning prompts for ${planScenes.length} scenes...`, totalScenes: planScenes.length });
 
     // Process in background
-    for (let i = 0; i < videoScenes.length; i++) {
-      const scene = videoScenes[i];
+    for (let i = 0; i < planScenes.length; i++) {
+      const scene = planScenes[i];
       const sceneNum = scene.scene_number || (project.scenes.indexOf(scene) + 1);
+      const mediaType = scene.media_type || scene.mediaType || 'video';
 
       broadcast({
         type: 'shot-planning-progress',
         projectId: project.id,
         scene: sceneNum,
-        total: videoScenes.length,
+        total: planScenes.length,
         current: i + 1,
         status: 'planning',
       });
 
       try {
-        const durations = shotPlanner.planShotDurations(scene.audioDuration);
-        const result = await shotPlanner.generateShotPrompts(scene, durations);
+        if (mediaType === 'still_image') {
+          const result = await shotPlanner.generateStillImagePrompts(scene, scene.audioDuration);
+          scene.imagePrompts = result.imagePrompts;
+          scene.shotsPlanned = true;
+          projectManager.saveProject(project.id, project);
 
-        // Store on scene
-        scene.shots = result.shots;
-        scene.shotBreakdown = result.breakdown;
-        scene.shotsPlanned = true;
-        projectManager.saveProject(project.id, project);
+          broadcast({
+            type: 'shot-planning-progress',
+            projectId: project.id,
+            scene: sceneNum,
+            total: planScenes.length,
+            current: i + 1,
+            status: 'done',
+            shotCount: result.imagePrompts.length,
+          });
+        } else {
+          const durations = shotPlanner.planShotDurations(scene.audioDuration);
+          const result = await shotPlanner.generateShotPrompts(scene, durations);
 
-        broadcast({
-          type: 'shot-planning-progress',
-          projectId: project.id,
-          scene: sceneNum,
-          total: videoScenes.length,
-          current: i + 1,
-          status: 'done',
-          shotCount: result.shots.length,
-        });
+          scene.shots = result.shots;
+          scene.shotBreakdown = result.breakdown;
+          scene.shotsPlanned = true;
+          projectManager.saveProject(project.id, project);
+
+          broadcast({
+            type: 'shot-planning-progress',
+            projectId: project.id,
+            scene: sceneNum,
+            total: planScenes.length,
+            current: i + 1,
+            status: 'done',
+            shotCount: result.shots.length,
+          });
+        }
       } catch (err) {
-        console.error(`Shot planning failed for scene ${sceneNum}:`, err.message);
+        console.error(`Planning failed for scene ${sceneNum}:`, err.message);
         broadcast({
           type: 'shot-planning-error',
           projectId: project.id,
@@ -415,7 +634,7 @@ app.post('/api/projects/:id/plan-shots', async (req, res) => {
       }
 
       // Delay between scenes to avoid Gemini rate limits
-      if (i < videoScenes.length - 1) {
+      if (i < planScenes.length - 1) {
         await new Promise(r => setTimeout(r, 3000));
       }
     }
@@ -429,7 +648,7 @@ app.post('/api/projects/:id/plan-shots', async (req, res) => {
   }
 });
 
-// Plan shots for a single scene
+// Plan shots/images for a single scene (works for both video and still_image)
 app.post('/api/projects/:id/plan-shots/:sceneNum', async (req, res) => {
   try {
     const project = projectManager.loadProject(req.params.id);
@@ -444,34 +663,65 @@ app.post('/api/projects/:id/plan-shots/:sceneNum', async (req, res) => {
       return res.status(400).json({ error: 'Scene has no audio duration. Generate audio first.' });
     }
 
-    const durations = shotPlanner.planShotDurations(duration);
-    res.json({ success: true, message: `Planning ${durations.length} shots for scene ${sceneNum}...`, shotDurations: durations });
+    const mediaType = scene.media_type || scene.mediaType || 'video';
 
-    // Generate in background
-    try {
-      const result = await shotPlanner.generateShotPrompts(scene, durations);
-      scene.shots = result.shots;
-      scene.shotBreakdown = result.breakdown;
-      scene.shotsPlanned = true;
-      projectManager.saveProject(project.id, project);
+    if (mediaType === 'still_image') {
+      const imageCount = Math.max(2, Math.ceil(duration / 5));
+      res.json({ success: true, message: `Generating ${imageCount} image prompts for scene ${sceneNum}...` });
 
-      broadcast({
-        type: 'shot-planning-progress',
-        projectId: project.id,
-        scene: sceneNum,
-        total: 1,
-        current: 1,
-        status: 'done',
-        shotCount: result.shots.length,
-      });
-    } catch (err) {
-      console.error(`Shot planning failed for scene ${sceneNum}:`, err.message);
-      broadcast({
-        type: 'shot-planning-error',
-        projectId: project.id,
-        scene: sceneNum,
-        error: err.message,
-      });
+      try {
+        const result = await shotPlanner.generateStillImagePrompts(scene, duration);
+        scene.imagePrompts = result.imagePrompts;
+        scene.shotsPlanned = true;
+        projectManager.saveProject(project.id, project);
+
+        broadcast({
+          type: 'shot-planning-progress',
+          projectId: project.id,
+          scene: sceneNum,
+          total: 1,
+          current: 1,
+          status: 'done',
+          shotCount: result.imagePrompts.length,
+        });
+      } catch (err) {
+        console.error(`Image prompt planning failed for scene ${sceneNum}:`, err.message);
+        broadcast({
+          type: 'shot-planning-error',
+          projectId: project.id,
+          scene: sceneNum,
+          error: err.message,
+        });
+      }
+    } else {
+      const durations = shotPlanner.planShotDurations(duration);
+      res.json({ success: true, message: `Planning ${durations.length} shots for scene ${sceneNum}...`, shotDurations: durations });
+
+      try {
+        const result = await shotPlanner.generateShotPrompts(scene, durations);
+        scene.shots = result.shots;
+        scene.shotBreakdown = result.breakdown;
+        scene.shotsPlanned = true;
+        projectManager.saveProject(project.id, project);
+
+        broadcast({
+          type: 'shot-planning-progress',
+          projectId: project.id,
+          scene: sceneNum,
+          total: 1,
+          current: 1,
+          status: 'done',
+          shotCount: result.shots.length,
+        });
+      } catch (err) {
+        console.error(`Shot planning failed for scene ${sceneNum}:`, err.message);
+        broadcast({
+          type: 'shot-planning-error',
+          projectId: project.id,
+          scene: sceneNum,
+          error: err.message,
+        });
+      }
     }
   } catch (err) {
     res.status(500).json({ error: err.message });

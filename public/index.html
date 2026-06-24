@@ -88,7 +88,7 @@
         </button>
         <button class="stepper__step" data-phase="5">
           <span class="stepper__number">5</span>
-          <span class="stepper__label">Render</span>
+          <span class="stepper__label">Export</span>
         </button>
       </nav>
 
@@ -254,31 +254,48 @@
         <!-- ═══ Phase 5 — Render ═══ -->
         <section id="phase-5" class="phase" data-phase="5">
           <div class="phase__header">
-            <h3 class="phase__title">🚀 Final Render</h3>
-            <p class="phase__desc">Assemble all scenes into a single polished educational video.</p>
+            <h3 class="phase__title">📦 Export Assets</h3>
+            <p class="phase__desc">Download your script, audio files, and shot chart for Premiere Pro assembly.</p>
           </div>
 
-          <div class="render-panel glass-card">
-            <div class="render-panel__status">
-              <div id="render-status-icon" class="render-status-icon">🎬</div>
-              <h4 id="render-status-text" class="render-status-text">Ready to Render</h4>
-              <p id="render-status-desc" class="text-sm text-muted">All scenes with audio and video will be combined into one video.</p>
-            </div>
-
-            <div id="render-progress-section" class="render-progress hidden">
-              <div class="render-progress__bar-wrap">
-                <div id="render-progress-bar" class="render-progress__bar" style="width: 0%"></div>
+          <div class="export-panel glass-card" style="display:grid;gap:16px;">
+            <div class="export-card" style="padding:20px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                <span style="font-size:2rem;">📝</span>
+                <div>
+                  <h4 style="margin:0;font-weight:600;">Full Script</h4>
+                  <p class="text-sm text-muted" style="margin:0;">Complete narration text for all scenes (.txt)</p>
+                </div>
               </div>
-              <p id="render-progress-label" class="text-sm text-center mt-1">Processing…</p>
+              <button id="btn-dl-script" class="btn btn--primary" style="width:100%;">
+                ⬇ Download Script
+              </button>
             </div>
 
-            <div class="render-panel__actions">
-              <button id="btn-render" class="btn btn--primary btn--large btn--glow">
-                🚀 Render Final Video
+            <div class="export-card" style="padding:20px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                <span style="font-size:2rem;">🎙️</span>
+                <div>
+                  <h4 style="margin:0;font-weight:600;">Audio Bundle</h4>
+                  <p class="text-sm text-muted" style="margin:0;">All scene voiceover WAV files in a single ZIP</p>
+                </div>
+              </div>
+              <button id="btn-dl-audio" class="btn btn--primary" style="width:100%;">
+                ⬇ Download Audio ZIP
               </button>
-              <a id="btn-download" href="#" class="btn btn--accent btn--large hidden" download>
-                ⬇ Download Video
-              </a>
+            </div>
+
+            <div class="export-card" style="padding:20px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;">
+              <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                <span style="font-size:2rem;">📊</span>
+                <div>
+                  <h4 style="margin:0;font-weight:600;">Shot Chart</h4>
+                  <p class="text-sm text-muted" style="margin:0;">Organized CSV with scenes, narration, Flow prompts, and audio cues</p>
+                </div>
+              </div>
+              <button id="btn-dl-chart" class="btn btn--primary" style="width:100%;">
+                ⬇ Download Shot Chart (CSV)
+              </button>
             </div>
           </div>
         </section>

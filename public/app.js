@@ -28,6 +28,7 @@
       kenBurnsDirection: s.kenBurnsDirection || s.ken_burns_direction || '',
       clips: s.clips || [],
       shots: s.shots || [],
+      imagePrompts: s.imagePrompts || [],
       shotsPlanned: s.shotsPlanned || false,
       shotBreakdown: s.shotBreakdown || null,
     };
@@ -101,15 +102,10 @@
     // Phase 4
     videoScenesContainer:  $('#video-scenes-container'),
 
-    // Phase 5
-    renderStatusIcon:      $('#render-status-icon'),
-    renderStatusText:      $('#render-status-text'),
-    renderStatusDesc:      $('#render-status-desc'),
-    renderProgressSection: $('#render-progress-section'),
-    renderProgressBar:     $('#render-progress-bar'),
-    renderProgressLabel:   $('#render-progress-label'),
-    btnRender:             $('#btn-render'),
-    btnDownload:           $('#btn-download'),
+    // Phase 5 - Export
+    btnDlScript:           $('#btn-dl-script'),
+    btnDlAudio:            $('#btn-dl-audio'),
+    btnDlChart:            $('#btn-dl-chart'),
 
     // Modal
     modalNewProject:       $('#modal-new-project'),
@@ -293,7 +289,7 @@
       if (p === 4 && hasVideo) s.classList.add('completed');
       else if (p === 4) s.classList.remove('completed');
 
-      if (p === 5 && state.renderStatus === 'done') s.classList.add('completed');
+      if (p === 5 && hasAudio) s.classList.add('completed');
       else if (p === 5) s.classList.remove('completed');
     });
   }
@@ -687,8 +683,9 @@
         : '<span class="badge badge--pending">Pending</span>';
 
       const audioPlayer = status === 'done'
-        ? `<div class="audio-player-wrap">
-            <audio controls preload="none" src="/api/projects/${state.currentProject.id}/audio/${num}"></audio>
+        ? `<div class="audio-player-wrap" style="display:flex;align-items:center;gap:10px;">
+            <audio controls preload="none" src="/api/projects/${state.currentProject.id}/audio/${num}" style="flex:1;"></audio>
+            <button class="btn-regen-audio" data-scene="${num}" title="Regenerate this audio" style="padding:6px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:0.85rem;white-space:nowrap;">🔄 Regen</button>
            </div>`
         : '';
 
@@ -706,6 +703,32 @@
         </div>
       `;
     }).join('');
+
+    // Wire up regenerate buttons
+    $$('.btn-regen-audio', dom.audioScenesContainer).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const sceneNum = +btn.dataset.scene;
+        const profileId = dom.voiceProfileSelect?.value || state.currentProject?.voiceProfileId;
+        if (!profileId) { toast('Select a voice profile first', 'error'); return; }
+
+        btn.disabled = true;
+        btn.textContent = '⏳ ...';
+        state.audioStatus[sceneNum] = 'generating';
+        renderAudioScenes();
+
+        try {
+          await api(`/api/projects/${state.currentProject.id}/regenerate-audio/${sceneNum}`, {
+            method: 'POST',
+            body: { profileId },
+          });
+          toast(`Regenerating audio for Scene ${sceneNum}...`, 'info');
+        } catch (err) {
+          toast(`Failed: ${err.message}`, 'error');
+          state.audioStatus[sceneNum] = 'done';
+          renderAudioScenes();
+        }
+      });
+    });
   }
 
   async function generateAudio() {
@@ -751,13 +774,12 @@
       return;
     }
 
-    // Check if any video scenes need shot planning
-    const hasVideoScenes = state.scenes.some(s => s.mediaType !== 'still_image' && s.audioDuration > 0);
-    const allPlanned = state.scenes.every(s => s.mediaType === 'still_image' || s.shotsPlanned || !s.audioDuration);
+    // Check if any scenes need planning (video OR still)
+    const hasUnplanned = state.scenes.some(s => s.audioDuration > 0 && !s.shotsPlanned);
 
-    const headerHtml = hasVideoScenes && !allPlanned
+    const headerHtml = hasUnplanned
       ? `<div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
-           <button class="btn btn--primary" id="btn-plan-all-shots">🎬 Plan All Shots</button>
+           <button class="btn btn--primary" id="btn-plan-all-shots">🎬 Plan All Prompts</button>
          </div>`
       : '';
 
@@ -776,11 +798,34 @@
 
       // ── Per-shot prompts for video scenes ──
       const shots = scene.shots || [];
-      const hasShotPlan = shots.length > 0 && scene.shotsPlanned;
+      const imagePrompts = scene.imagePrompts || [];
+      const hasShotPlan = (shots.length > 0 || imagePrompts.length > 0) && scene.shotsPlanned;
 
       let promptSection = '';
-      if (isStill) {
-        // Still image: show single prompt as before
+      if (isStill && hasShotPlan && imagePrompts.length > 0) {
+        // Still image WITH multi-prompt plan
+        const imagesHtml = imagePrompts.map(img => `
+          <div class="shot-prompt-card" style="padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+              <span class="badge badge--bronze" style="font-size:.7rem;">Image ${img.image_number}</span>
+              <span class="badge" style="font-size:.7rem;background:rgba(139,92,246,0.15);color:#8B5CF6;">${img.display_duration}s</span>
+              <span style="font-size:.75rem;color:var(--text-muted);">🎬 ${esc(img.ken_burns_direction)}</span>
+            </div>
+            <p class="text-sm text-muted" style="line-height:1.5;margin-bottom:8px;">${esc(img.prompt || 'No prompt')}</p>
+            <button class="btn-copy-large" data-copy="${esc(img.prompt || '')}" style="font-size:.8rem;padding:4px 12px;">📋 Copy</button>
+          </div>
+        `).join('');
+
+        promptSection = `
+          <div class="video-scene-card__prompt">
+            <div class="flex-between mb-2">
+              <span class="label-sm">Image Prompts (${imagePrompts.length} images · ~${audioDuration.toFixed(0)}s total)</span>
+              <button class="btn-replan btn--sm" data-scene="${num}" style="font-size:.75rem;padding:4px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:var(--text-muted);cursor:pointer;">↻ Re-plan</button>
+            </div>
+            ${imagesHtml}
+          </div>`;
+      } else if (isStill) {
+        // Still image WITHOUT plan yet — show original single prompt + plan button
         const kenBurnsInfo = scene.kenBurnsDirection
           ? `<div class="ken-burns-info" style="margin-top:8px;padding:8px 12px;background:rgba(150,99,39,0.15);border-radius:6px;font-size:0.85rem;">
               <strong>🎬 Camera Movement:</strong> ${esc(scene.kenBurnsDirection)}
@@ -789,11 +834,15 @@
         promptSection = `
           <div class="video-scene-card__prompt">
             <div class="flex-between mb-2">
-              <span class="label-sm">Image Generation Prompt</span>
+              <span class="label-sm">Image Generation Prompt (1 of 1)</span>
             </div>
             <p class="text-sm text-muted mb-3" style="line-height:1.6">${esc(scene.flowPrompt || 'No prompt available')}</p>
             <button class="btn-copy-large" data-copy="${esc(scene.flowPrompt || '')}">📋 Copy Prompt</button>
             ${kenBurnsInfo}
+            ${audioDuration > 0
+              ? `<button class="btn btn--primary btn-plan-scene" data-scene="${num}" style="margin-top:12px;">🖼️ Generate ${Math.max(2, Math.ceil(audioDuration / 5))} Image Prompts (${audioDuration.toFixed(1)}s)</button>`
+              : ''
+            }
           </div>`;
       } else if (hasShotPlan) {
         // Video with shot plan: show per-shot prompts
@@ -921,7 +970,11 @@
             <span style="flex:1; font-weight:600;">${esc(scene.title || `Scene ${num}`)}</span>
             <span class="badge ${mediaBadgeClass}">${mediaLabel}</span>
             ${audioDuration ? `<span class="duration-badge">⏱ ${audioDuration.toFixed(1)}s</span>` : ''}
-            ${hasShotPlan ? `<span class="badge" style="background:rgba(139,92,246,0.15);color:#8B5CF6;">${shots.length} shots</span>` : ''}
+            ${hasShotPlan
+              ? (isStill
+                ? `<span class="badge" style="background:rgba(150,99,39,0.15);color:#966327;">${imagePrompts.length} images</span>`
+                : `<span class="badge" style="background:rgba(139,92,246,0.15);color:#8B5CF6;">${shots.length} shots</span>`)
+              : ''}
             ${statusBadge}
           </div>
           <div class="scene-card__body">
@@ -1077,58 +1130,15 @@
   }
 
   // ─────────────────────────────────────
-  // PHASE 5 — Render
+  // PHASE 5 — Export
   // ─────────────────────────────────────
-  function updateRenderPanel() {
-    if (state.renderStatus === 'done') {
-      dom.renderStatusIcon.textContent = '✅';
-      dom.renderStatusText.textContent = 'Render Complete!';
-      dom.renderStatusDesc.textContent = 'Your video is ready for download.';
-      dom.renderProgressSection.classList.add('hidden');
-      dom.btnRender.classList.add('hidden');
-      dom.btnDownload.classList.remove('hidden');
-      dom.btnDownload.href = `/api/projects/${state.currentProject.id}/download`;
-    } else if (state.renderStatus === 'rendering') {
-      dom.renderStatusIcon.textContent = '⚙️';
-      dom.renderStatusText.textContent = 'Rendering…';
-      dom.renderStatusDesc.textContent = 'Assembling your video scenes. This may take a few minutes.';
-      dom.renderProgressSection.classList.remove('hidden');
-      dom.btnRender.classList.add('hidden');
-      dom.btnDownload.classList.add('hidden');
-    } else {
-      dom.renderStatusIcon.textContent = '🎬';
-      dom.renderStatusText.textContent = 'Ready to Render';
-      dom.renderStatusDesc.textContent = 'All scenes with audio and video will be combined into one video.';
-      dom.renderProgressSection.classList.add('hidden');
-      dom.btnRender.classList.remove('hidden');
-      dom.btnDownload.classList.add('hidden');
-      dom.renderProgressBar.style.width = '0%';
-    }
-  }
-
-  async function startRender() {
-    if (!state.currentProject) return;
-    state.renderStatus = 'rendering';
-    updateRenderPanel();
-    try {
-      await api(`/api/projects/${state.currentProject.id}/render`, { method: 'POST' });
-      // If no WebSocket, assume done after response
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        finishRender();
-      }
-    } catch {
-      state.renderStatus = 'idle';
-      updateRenderPanel();
-    }
-  }
-
-  function finishRender() {
-    state.renderStatus = 'done';
-    dom.renderProgressBar.style.width = '100%';
-    dom.renderProgressLabel.textContent = 'Complete!';
-    setTimeout(() => updateRenderPanel(), 600);
-    toast('Video rendered successfully!', 'success');
-    updateStepperAccess();
+  function triggerDownload(url, fallbackName) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fallbackName || '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   // ─────────────────────────────────────
@@ -1215,8 +1225,19 @@
     });
     dom.btnGenerateAudio.addEventListener('click', generateAudio);
 
-    // Phase 5 — Render
-    dom.btnRender.addEventListener('click', startRender);
+    // Phase 5 — Export
+    dom.btnDlScript?.addEventListener('click', () => {
+      if (!state.currentProject) { toast('Open a project first', 'error'); return; }
+      triggerDownload(`/api/projects/${state.currentProject.id}/download-script`, 'script.txt');
+    });
+    dom.btnDlAudio?.addEventListener('click', () => {
+      if (!state.currentProject) { toast('Open a project first', 'error'); return; }
+      triggerDownload(`/api/projects/${state.currentProject.id}/download-audio-bundle`, 'audio.zip');
+    });
+    dom.btnDlChart?.addEventListener('click', () => {
+      if (!state.currentProject) { toast('Open a project first', 'error'); return; }
+      triggerDownload(`/api/projects/${state.currentProject.id}/download-shot-chart`, 'shot_chart.csv');
+    });
   }
 
   // ─────────────────────────────────────
