@@ -362,6 +362,10 @@ a:hover { text-decoration: underline; }
   background-repeat: no-repeat; background-position: right 12px center;
   padding-right: 36px;
 }
+.select option {
+  background-color: #0a0a0f;
+  color: rgba(255, 255, 255, 0.92);
+}
 
 .input-row { display: flex; gap: 12px; }
 .input-row .input { flex: 1; }
