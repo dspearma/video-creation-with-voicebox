@@ -189,11 +189,15 @@ app.post('/api/projects/:id/generate-script', async (req, res) => {
 
     const learningObjective =
       req.body.learningObjective || project.learningObjective || 'Create an educational video';
+    const format = req.body.format || 'standard';
 
     project.learningObjective = learningObjective;
+    project.videoFormat = format;
+
     const scenes = await scriptGenerator.generateScript(
       project.researchText,
-      learningObjective
+      learningObjective,
+      format
     );
 
     project.scenes = scenes;
@@ -438,7 +442,10 @@ app.get('/api/projects/:id/download-script', (req, res) => {
       const sceneTitle = scene.title || `Scene ${sceneNum}`;
       text += `Scene ${sceneNum}: ${sceneTitle}\n`;
       text += `${'-'.repeat(`Scene ${sceneNum}: ${sceneTitle}`.length)}\n`;
-      text += `${scene.narration || ''}\n\n`;
+      if (scene.on_screen_text || scene.onScreenText) {
+        text += `On-Screen Text: ${scene.on_screen_text || scene.onScreenText}\n`;
+      }
+      text += `Narration: ${scene.narration || ''}\n\n`;
     });
 
     const safeName = (project.name || 'project').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -499,7 +506,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
       return str;
     }
 
-    const header = 'Scene,Title,Type,Duration(s),Narration,Shot#,Shot Duration(s),Shot Type,Flow Prompt,Audio Cues';
+    const header = 'Scene,Title,Type,Duration(s),Narration,On-Screen Text,Shot#,Shot Duration(s),Shot Type,Flow Prompt,Audio Cues';
     const rows = [header];
 
     (project.scenes || []).forEach((scene, i) => {
@@ -508,6 +515,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
       const mediaType = scene.media_type || scene.mediaType || 'video';
       const duration = scene.audioDuration || '';
       const narration = scene.narration || '';
+      const onScreenText = scene.on_screen_text || scene.onScreenText || '';
 
       if (scene.shots && scene.shots.length > 0) {
         // Video scenes with multi-shot plan
@@ -518,6 +526,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
             csvEscape(mediaType),
             csvEscape(duration),
             csvEscape(si === 0 ? narration : ''),
+            csvEscape(si === 0 ? onScreenText : ''),
             csvEscape(shot.shot_number || si + 1),
             csvEscape(shot.duration || ''),
             csvEscape(shot.shot_type || ''),
@@ -534,6 +543,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
             csvEscape(mediaType),
             csvEscape(duration),
             csvEscape(ii === 0 ? narration : ''),
+            csvEscape(ii === 0 ? onScreenText : ''),
             csvEscape(img.image_number || ii + 1),
             csvEscape(img.display_duration || ''),
             csvEscape(`Still Image - ${img.ken_burns_direction || 'static'}`),
@@ -549,6 +559,7 @@ app.get('/api/projects/:id/download-shot-chart', (req, res) => {
           csvEscape(mediaType),
           csvEscape(duration),
           csvEscape(narration),
+          csvEscape(onScreenText),
           csvEscape(''),
           csvEscape(''),
           csvEscape(''),

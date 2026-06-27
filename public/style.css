@@ -365,6 +365,19 @@ a:hover { text-decoration: underline; }
 
 .input-row { display: flex; gap: 12px; }
 .input-row .input { flex: 1; }
+.flex-1 { flex: 1; }
+
+.script-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 768px) {
+  .script-form-grid {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+}
 
 /* ─── Labels ─── */
 .label-sm { font-size: .75rem; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--text-muted); display: block; }

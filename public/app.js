@@ -16,6 +16,7 @@
   function normalizeScene(s) {
     return {
       ...s,
+      onScreenText: s.onScreenText || s.on_screen_text || '',
       flowPrompt: s.flowPrompt || s.flow_prompt || '',
       visualType: s.visualType || s.visual_type || '',
       pacingNotes: s.pacingNotes || s.pacing_notes || '',
@@ -85,6 +86,7 @@
 
     // Phase 2
     learningObjective:     $('#learning-objective'),
+    videoFormat:           $('#video-format'),
     btnGenerateScript:     $('#btn-generate-script'),
     generateScriptSpinner: $('#generate-script-spinner'),
     scenesContainer:       $('#scenes-container'),
@@ -356,6 +358,9 @@
       dom.projectTitle.textContent = project.name || 'Untitled Project';
       dom.researchText.value = state.researchText;
       dom.learningObjective.value = project.learningObjective || '';
+      if (dom.videoFormat) {
+        dom.videoFormat.value = project.videoFormat || 'standard';
+      }
 
       // Show research preview if present
       if (state.researchText) {
@@ -392,6 +397,9 @@
     dom.researchText.value = '';
     dom.researchPreview.classList.add('hidden');
     dom.learningObjective.value = '';
+    if (dom.videoFormat) {
+      dom.videoFormat.value = 'standard';
+    }
     dom.scenesContainer.innerHTML = '<div class="empty-state"><span class="empty-state__icon">🎞</span><p>No scenes yet.</p></div>';
     dom.scenesActions.classList.add('hidden');
     state.audioStatus = {};
@@ -531,13 +539,15 @@
     if (!objective) { toast('Enter a learning objective', 'error'); return; }
     if (!state.currentProject) { toast('Select a project first', 'error'); return; }
 
+    const format = dom.videoFormat?.value || 'standard';
+
     dom.btnGenerateScript.disabled = true;
     dom.generateScriptSpinner.classList.remove('hidden');
 
     try {
       const data = await api(`/api/projects/${state.currentProject.id}/generate-script`, {
         method: 'POST',
-        body: { learningObjective: objective },
+        body: { learningObjective: objective, format },
       });
       state.scenes = normalizeScenes(data.scenes || data);
       renderScenes();
@@ -570,6 +580,10 @@
             <button class="scene-card__delete" data-index="${i}" title="Remove scene">&times;</button>
           </div>
           <div class="scene-card__body">
+            <div style="margin-bottom: 12px;">
+              <span class="label-sm">On-Screen Text (Overlay)</span>
+              <input type="text" class="scene-card__on-screen-text" value="${esc(scene.onScreenText || '')}" data-index="${i}" style="width: 100%; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--border-glass); border-radius: var(--radius-sm); color: var(--text-primary); font-family: inherit; font-size: 0.9rem;" />
+            </div>
             <div>
               <div class="scene-card__narration-label">
                 <span class="label-sm">Narration</span>
@@ -593,6 +607,11 @@
     $$('.scene-card__title-input', dom.scenesContainer).forEach(input => {
       input.addEventListener('change', () => {
         state.scenes[+input.dataset.index].title = input.value;
+      });
+    });
+    $$('.scene-card__on-screen-text', dom.scenesContainer).forEach(input => {
+      input.addEventListener('change', () => {
+        state.scenes[+input.dataset.index].onScreenText = input.value;
       });
     });
     $$('.scene-card__narration', dom.scenesContainer).forEach(ta => {
@@ -902,6 +921,11 @@
               : ''}
           </div>
           <div class="scene-card__body">
+            ${scene.onScreenText ? `
+              <div class="on-screen-text-preview" style="margin-bottom:12px;padding:8px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;font-size:0.85rem;">
+                <strong>💬 On-Screen Text:</strong> <span style="font-weight:700;color:var(--cyan);">${esc(scene.onScreenText)}</span>
+              </div>
+            ` : ''}
             ${promptSection}
           </div>
         </div>
